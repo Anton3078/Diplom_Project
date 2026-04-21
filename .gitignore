@@ -5,4 +5,7 @@ bin/
 .env
 venv/
 .venv/
+*.swp
+*.backup
+src/Client/Face_App/
 onnxruntime/
