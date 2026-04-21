@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QIcon, QFont, QPixmap, QImage, QFontDatabase, QColor
 
-# --- Добавлены функции для разбора бинарного ответа ---
 def parse_face_results(data, count):
     """
     Парсит байтовые данные в список координат (x1, y1, x2, y2).
@@ -25,32 +24,25 @@ def parse_face_results(data, count):
     """
     face_coords = []
     offset = 0
-    # Размер одного face_result_t без embedding: 4 float + 1 float + 1 uint32 = 24 байта
-    # Если embedding не используется или передаётся отдельно, можно его игнорировать.
-    # Проверим длину данных. Если она соответствует 24 байтам * count, будем использовать этот формат.
-    expected_min_size_without_embedding = count * 24  # 4*4 + 4 + 4
-    expected_full_size = count * (4*4 + 4 + 4 + 512) # 536 байт на face_result_t
+    
+    expected_min_size_without_embedding = count * 24  
+    expected_full_size = count * (4*4 + 4 + 4 + 512) 
 
     if len(data) == expected_full_size:
-        # Используем полный формат, включая embedding
         for i in range(count):
-            start = offset + i * 536 # 536 байт на каждый face_result_t
+            start = offset + i * 536 
             chunk = data[start:start + 536]
-            if len(chunk) < 24: # Проверяем, достаточно ли данных для основных полей
+            if len(chunk) < 24: 
                 print(f"Ошибка: недостаточно данных для парсинга результата {i}")
                 continue
-            # Распаковываем только основные поля: x1, y1, x2, y2, confidence, class_id
-            # fmt = '4f f I 128f' -> '4f f I' (берём только первые 24 байта)
+            
             try:
                 x1, y1, x2, y2, confidence, class_id = struct.unpack('4f f I', chunk[:20])
             except struct.error as e:
                 print(f"Ошибка распаковки полного формата для результата {i}: {e}")
                 continue
             face_coords.append((int(x1), int(y1), int(x2), int(y2)))
-            # print(f"Обработано лицо {i}: ({x1}, {y1}, {x2}, {y2}), conf={confidence}, class={class_id}") # Для отладки
     elif len(data) >= expected_min_size_without_embedding:
-        # Используем упрощённый формат без embedding в потоке данных
-        # Предположим, сервер отправляет только основные 24 байта на лицо после face_count
         for i in range(count):
             start = offset + i * 24
             chunk = data[start:start + 24]
@@ -63,14 +55,12 @@ def parse_face_results(data, count):
                 print(f"Ошибка распаковки упрощенного формата для результата {i}: {e}")
                 continue
             face_coords.append((int(x1), int(y1), int(x2), int(y2)))
-            # print(f"Обработано лицо {i}: ({x1}, {y1}, {x2}, {y2}), conf={confidence}, class={class_id}") # Для отладки
     else:
         print(f"Ошибка: неожиданный размер данных ответа для {count} лиц. Длина: {len(data)}, ожидалось ~{expected_min_size_without_embedding} или ~{expected_full_size}")
 
     return face_coords
 
 def receive_full(sock, size):
-    """Получает ровно 'size' байт из сокета."""
     data = b''
     while len(data) < size:
         packet = sock.recv(size - len(data))
@@ -78,16 +68,14 @@ def receive_full(sock, size):
             raise ConnectionError("Соединение закрыто сервером")
         data += packet
     return data
-# --- Конец добавленных функций ---
 
 class MainWindow(QMainWindow):
     def __init__(self, host: str, port: int):
         super().__init__()
-        # Координаты bbox изображения
-        self.coords = [] # Не используется напрямую, результаты теперь в списке
-        # Create socket
+        self.coords = [] 
+        
         self.host = host
-        self.port = port # Исправление: добавлена строка для присвоения порта
+        self.port = port 
         self.client_socket = None
 
         # ===== НАСТРОЙКИ ОКНА =====
@@ -106,14 +94,13 @@ class MainWindow(QMainWindow):
         shadow.setBlurRadius(30)
         shadow.setXOffset(0)
         shadow.setYOffset(10)
-        shadow.setColor(QColor(0, 0, 0, 80)) # Исправление: перемещена строка и добавлен префикс QColor
+        shadow.setColor(QColor(0, 0, 0, 80)) 
         self.setGraphicsEffect(shadow)
 
         # Загрузка шрифтов с проверкой
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
         # Michroma шрифт
-        # Исправлены пути: убраны лишние пробелы
         michroma_path = os.path.join(base_dir, "..", "font", "Michroma-Regular.ttf")
         michroma_id = QFontDatabase.addApplicationFont(michroma_path)
         if michroma_id != -1:
@@ -148,7 +135,7 @@ class MainWindow(QMainWindow):
         self.main_layout = QVBoxLayout()
         self.top_layout = QHBoxLayout()
         self.center_layout = QVBoxLayout()
-        self.name_layout = QVBoxLayout()  # Layout для названия + линии
+        self.name_layout = QVBoxLayout()  
 
         self.center_widget = QWidget()
 
@@ -294,8 +281,6 @@ class MainWindow(QMainWindow):
             if original_h == 0 or original_w == 0:
                  print("Изображение имеет нулевую высоту или ширину.")
                  return
-            # Изменяем размер для отправки на сервер (предполагается, что сервер ожидает 224x224)
-            # !!! ВАЖНО: Убедитесь, что модель на сервере обучена на этом размере или масштабируйте результаты обратно
             target_size = (224, 224)
             self.img = cv2.resize(self.img, target_size, interpolation=cv2.INTER_AREA)
 
@@ -309,22 +294,16 @@ class MainWindow(QMainWindow):
             image_bytes = encoded_image.tobytes()
 
             # Создаем сокет и подключаемся (AF_INET6 для IPv6)
-            # Используем localhost для IPv6
             self.client_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-            # Для localhost IPv6 адрес обычно ::1
-            # Если сервер слушает на всех интерфейсах IPv6, можно указать '[::]' как хост в сервере
-            # Здесь мы подключаемся к ::1 на порт 8080
-            server_address = ('::1', 8080, 0, 0) # format: (host, port, flowinfo, scope_id)
+            server_address = ('::1', 8080, 0, 0) 
             self.client_socket.connect(server_address)
             
-            # --- Отправка ---
             # Отправляем размер данных (4 байта, unsigned int)
             self.client_socket.send(struct.pack('!I', len(image_bytes))) #  '!I' = big-endian unsigned int (4 bytes)
             # Отправляем само изображение
             self.client_socket.sendall(image_bytes)
 
             # --- Получение ---
-            # 1. Получаем количество обнаруженных лиц (4 байта, signed int)
             face_count_data = receive_full(self.client_socket, 4)
             self.hex_dump(face_count_data, "Raw face_count bytes")
             try:
@@ -339,33 +318,20 @@ class MainWindow(QMainWindow):
 
             results_list = []
             if face_count > 0:
-                # 2. Получаем данные для каждого лица
-                # Предположим, что сервер отправляет только основные 24 байта на лицо (x1,y1,x2,y2,conf,class_id)
-                # и ли полные 536 байт. Попробуем получить минимально необходимое количество байт.
-                # Лучше всего, чтобы сервер отправлял фиксированный формат, например, 24 байта на лицо.
-                # Если он отправляет 536, нужно изменить расчёт здесь.
                 expected_data_size_per_face = 24 # Попробуем сначала 24 байта
                 total_expected_size = face_count * expected_data_size_per_face
 
-                # Попробуем получить 24 * face_count байт
                 try:
                     raw_face_data = receive_full(self.client_socket, total_expected_size)
                     self.hex_dump(raw_face_data, f"Raw face data (first {face_count} faces)")
                     results_list = parse_face_results(raw_face_data, face_count)
                 except ConnectionError as e:
                     print(f"Ошибка получения основных данных: {e}. Пробуем получить полные 536 байта на лицо.")
-                    # Если не получилось, попробуем получить полные 536 байт на лицо
+                    
                     expected_data_size_per_face_full = 536
                     total_expected_size_full = face_count * expected_data_size_per_face_full
                     raw_face_data_full = receive_full(self.client_socket, total_expected_size_full)
                     results_list = parse_face_results(raw_face_data_full, face_count)
-
-            # 3. (Опционально) Получаем информацию об ошибке (1 байт), если сервер её отправляет
-            # raw_error_info = self.client_socket.recv(1) # Если сервер всегда отправляет 1 байт ошибки в конце
-            # if raw_error_info:
-            #     err_type_code = struct.unpack('B', raw_error_info)[0] # 'B' = unsigned char (1 byte)
-            #     print(f"Получен код ошибки: {err_type_code}")
-
 
             # Закрываем сокет
             self.client_socket.close()
@@ -373,10 +339,7 @@ class MainWindow(QMainWindow):
 
             # ===== ШАГ 3: ОТРИСОВКА BOUNDING BOX =====
             if results_list:
-                # Рисуем прямоугольники на ИСХОДНОМ изображении, масштабируя координаты
-                # Координаты от сервера (предположительно) для размера target_size (224x224)
-                # Масштабируем их обратно к размеру оригинального изображения
-                img_with_boxes = self.img.copy() # Рисуем на изменённом изображении для отображения в GUI
+                img_with_boxes = self.img.copy() 
                 scale_x = original_w / target_size[0]
                 scale_y = original_h / target_size[1]
 
@@ -387,14 +350,12 @@ class MainWindow(QMainWindow):
                     x2_scaled = int(x2_raw * scale_x)
                     y2_scaled = int(y2_raw * scale_y)
 
-                    # --- ИСПРАВЛЕНИЕ: Используем масштабированные координаты для рисования на 224x224 ---
-                    # Если хотим рисовать на оригинале, используем img_orig.copy() и scaled координаты
                     img_with_boxes = cv2.rectangle(
                         img_with_boxes,
-                        (x1_scaled, y1_scaled), # <-- Используем масштабированные координаты
-                        (x2_scaled, y2_scaled), # <-- Используем масштабированные координаты
-                        thickness=2, # Толщина линии
-                        color=(0, 255, 0) # Зелёный цвет
+                        (x1_scaled, y1_scaled),
+                        (x2_scaled, y2_scaled),
+                        thickness=2,
+                        color=(0, 255, 0)
                      )
                     print(f"Отмечено лицо: ({x1_scaled}, {y1_scaled}, {x2_scaled}, {y2_scaled}) (на 224x224)")
 
@@ -415,7 +376,7 @@ class MainWindow(QMainWindow):
             print(f"Error in recognize: {ex}")
             if self.client_socket:
                 self.client_socket.close()
-                self.client_socket = None # Убедимся, что сокет сброшен даже при исключении
+                self.client_socket = None
 
     def convert_cv_to_pixmap(self, cv_img):
         """Конвертображения в QPixmap"""
@@ -439,10 +400,8 @@ class MainWindow(QMainWindow):
             event.accept()
 
 def main():
-    # host = socket.gethostname() # Не используется напрямую в соединении IPv6
-    # port = 8080 # Используется напрямую в connect
     app = QApplication(sys.argv)
-    window = MainWindow("::1", 8080) # Передаём IPv6 localhost
+    window = MainWindow("::1", 8080)
     window.show()
     sys.exit(app.exec())
 
