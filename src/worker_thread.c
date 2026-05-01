@@ -3,7 +3,7 @@
  * @brief Реализация рабочего потока с каскадной обработкой Detection + Recognition.
  */
 
-#include "../include/t_master.h"
+#include "../../include/t_master.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,17 +18,16 @@
 
 // Библиотеки для ресайза
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "stb_image_resize2.h"
+#include "../../include/stb_image_resize2.h"
 
 // ONNX Runtime
 #include <onnxruntime_c_api.h>
 
 #define DET_MODEL_WIDTH  224
 #define DET_MODEL_HEIGHT 224
-#define REC_MODEL_WIDTH  224
-#define REC_MODEL_HEIGHT 224
+#define REC_MODEL_WIDTH  160
+#define REC_MODEL_HEIGHT 160
 #define NUM_CLASSES      100
-#define EMBEDDING_SIZE   128
 
 // Локальный контекст рабочего потока
 typedef struct worker_thread_context {
@@ -41,6 +40,9 @@ typedef struct worker_thread_context {
     float det_std[3];
     float rec_mean[3];
     float rec_std[3];
+    float* know_embeddings;
+    int* know_labels;
+    int num_persons;
     const char* det_input_names[1];
     const char* det_output_names[1];
     const char* rec_input_names[1];
@@ -132,7 +134,7 @@ static float* preprocess_rgb(const unsigned char* rgb, int src_w, int src_h,
     unsigned char* resized = malloc(dst_w * dst_h * 3);
     if (!resized) return NULL;
 
-    // Используем STBIR_RGB (синоним STBIR_3CHANNEL)
+    // Используем STBIR_RGB
     if (!stbir_resize_uint8_linear(rgb, src_w, src_h, 0,
                                    resized, dst_w, dst_h, 0,
                                    STBIR_RGB)) {
@@ -253,12 +255,11 @@ static int run_detection(OrtSession* session, const OrtApi* ort, OrtMemoryInfo* 
     return (conf > 0.5f) ? 1 : 0;
 }
 
-static int run_recognition(OrtSession* session, const OrtApi* ort, OrtMemoryInfo* memory_info,
+static int run_recognition_embedding(OrtSession* session, const OrtApi* ort, OrtMemoryInfo* memory_info,
                            const float* tensor, int rec_w, int rec_h,
-                           int* out_class) {
+                           int* out_class, float* out_conf, worker_thread_context_t* ctx) {
     OrtValue* input_tensor = NULL;
     OrtValue* output_tensor = NULL;
-
     int64_t input_shape[] = {1, 3, rec_h, rec_w};
     size_t input_size = 1 * 3 * rec_h * rec_w * sizeof(float);
 
@@ -272,11 +273,12 @@ static int run_recognition(OrtSession* session, const OrtApi* ort, OrtMemoryInfo
     }
 
     const char* input_names[] = {"input"};
-    const char* output_names[] = {"output"};
+    const char* output_names[] = {"embedding"};
 
     status = ort->Run(session, NULL, input_names, (const OrtValue* const*)&input_tensor,
                       1, output_names, 1, &output_tensor);
     if (status) {
+        fprintf(stderr, "[Worker] Recognition embedding inference failed: %s\n", ort->GetErrorMessage(status));
         ort->ReleaseStatus(status);
         ort->ReleaseValue(input_tensor);
         return -1;
@@ -290,16 +292,40 @@ static int run_recognition(OrtSession* session, const OrtApi* ort, OrtMemoryInfo
         ort->ReleaseValue(output_tensor);
         return -1;
     }
-
-    int max_idx = 0;
-    float max_val = output_data[0];
-    for (int i = 1; i < NUM_CLASSES; i++) {
-        if (output_data[i] > max_val) {
-            max_val = output_data[i];
-            max_idx = i;
+    
+    float norm = 0.0f;
+    for (int i = 0; i < EMBEDDING_SIZE; i++)
+    {
+        norm += output_data[i] * output_data[i];
+    }
+    norm = sqrtf(norm);
+    if (norm > 0.0f)
+    {
+        for (int i = 0; i < EMBEDDING_SIZE; i++) 
+        {
+            output_data[i] /= norm;
         }
     }
-    *out_class = max_idx;
+
+    float best_sim = -1.0f;
+    int best_label = -1;
+    for (int p = 0; p < ctx->num_persons; p++)
+    {
+        const float* know_emb = ctx->know_embeddings + p * EMBEDDING_SIZE;
+        float dot = 0.0f;
+        for (int i = 0; i < EMBEDDING_SIZE; i++) 
+        {
+            dot += output_data[i] * know_emb[i];
+        }
+        if (dot > best_sim)
+        {
+            best_sim = dot;
+            best_label = ctx->know_labels[p];
+        }
+    }
+    
+    *out_class = best_label;
+    *out_conf = best_sim;
 
     ort->ReleaseValue(input_tensor);
     ort->ReleaseValue(output_tensor);
@@ -334,11 +360,33 @@ static worker_thread_context_t* worker_context_create(const worker_config_t* cfg
                                             &ctx->memory_info);
     ctx->recognition_session = create_session(ctx->ort, ctx->env, cfg->recognition_model_path,
                                               &ctx->memory_info);
+    
+    FILE* femb = fopen("./models/embeddings.bin", "rb");
+    if (femb)
+    {
+        fseek(femb, 0, SEEK_END);
+        long emb_bytes = ftell(femb);
+        fseek(femb, 0, SEEK_SET);
+        ctx->num_persons = emb_bytes / (sizeof(float) * EMBEDDING_SIZE);
+        ctx->know_embeddings = malloc(emb_bytes);
+        fread(ctx->know_embeddings, 1, emb_bytes, femb);
+        fclose(femb);
+        printf("[Worker] Loaded %d embeddings\n", ctx->num_persons);
+
+        FILE* flbl = fopen("./models/labels.bin", "rb");
+
+        if (flbl) 
+        {
+            ctx->know_labels = malloc(ctx->num_persons * sizeof(int));
+            fread(ctx->know_labels,  sizeof(int), ctx->num_persons, flbl);
+            fclose(flbl);
+        }
+    }
 
     ctx->det_mean[0] = 0.485f; ctx->det_mean[1] = 0.456f; ctx->det_mean[2] = 0.406f;
     ctx->det_std[0]  = 0.229f; ctx->det_std[1]  = 0.224f; ctx->det_std[2]  = 0.225f;
-    ctx->rec_mean[0] = 0.485f; ctx->rec_mean[1] = 0.456f; ctx->rec_mean[2] = 0.406f;
-    ctx->rec_std[0]  = 0.229f; ctx->rec_std[1]  = 0.224f; ctx->rec_std[2]  = 0.225f;
+    ctx->rec_mean[0] = 0.5f; ctx->rec_mean[1] = 0.5f; ctx->rec_mean[2] = 0.5f;
+    ctx->rec_std[0]  = 0.5f; ctx->rec_std[1]  = 0.5f; ctx->rec_std[2]  = 0.5f;
 
     ctx->det_input_names[0] = "input";
     ctx->det_output_names[0] = "output";
@@ -354,6 +402,8 @@ static void worker_context_free(worker_thread_context_t* ctx) {
     if (ctx->detection_session) ctx->ort->ReleaseSession(ctx->detection_session);
     if (ctx->memory_info) ctx->ort->ReleaseMemoryInfo(ctx->memory_info);
     if (ctx->env) ctx->ort->ReleaseEnv(ctx->env);
+    if (ctx->know_embeddings) { free(ctx->know_embeddings); ctx->know_embeddings = NULL; }
+    if (ctx->know_labels) { free(ctx->know_labels); ctx->know_labels = NULL; }
     free(ctx);
 }
 
@@ -443,10 +493,10 @@ static void process_task(task_descriptor_t* task, worker_thread_context_t* ctx) 
     }
 
     for (int i = 0; i < face_count && i < MAX_FACES_PER_IMAGE; i++) {
-        int x1 = (int)(det_faces[i].x1 * img_w);
-        int y1 = (int)(det_faces[i].y1 * img_h);
-        int x2 = (int)(det_faces[i].x2 * img_w);
-        int y2 = (int)(det_faces[i].y2 * img_h);
+        int x1 = (int)(det_faces[i].x1 * DET_MODEL_WIDTH);
+        int y1 = (int)(det_faces[i].y1 * DET_MODEL_HEIGHT);
+        int x2 = (int)(det_faces[i].x2 * DET_MODEL_WIDTH);
+        int y2 = (int)(det_faces[i].y2 * DET_MODEL_HEIGHT);
 
         if (x1 < 0) x1 = 0;
         if (y1 < 0) y1 = 0;
@@ -464,16 +514,17 @@ static void process_task(task_descriptor_t* task, worker_thread_context_t* ctx) 
                    face_w * 3);
         }
 
-        float* rec_tensor = preprocess_rgb(face_rgb, face_w, face_h,
+        float* rec_tensor = preprocess_rgb(rgb, img_w, img_h,
                                            REC_MODEL_WIDTH, REC_MODEL_HEIGHT,
                                            ctx->rec_mean, ctx->rec_std);
         free(face_rgb);
         if (!rec_tensor) continue;
 
-        int predicted_class;
-        if (run_recognition(ctx->recognition_session, ctx->ort, ctx->memory_info,
+        int predicted_class = -1;
+        float recog_conf = 0.0f;
+        if (run_recognition_embedding(ctx->recognition_session, ctx->ort, ctx->memory_info,
                             rec_tensor, REC_MODEL_WIDTH, REC_MODEL_HEIGHT,
-                            &predicted_class) == 0) {
+                            &predicted_class, &recog_conf, ctx) == 0) {
             result.faces[result.face_count].x1 = det_faces[i].x1 * img_w;
             result.faces[result.face_count].y1 = det_faces[i].y1 * img_h;
             result.faces[result.face_count].x2 = det_faces[i].x2 * img_w;

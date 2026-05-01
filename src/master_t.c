@@ -1,4 +1,4 @@
-#include "../include/t_master.h"
+#include "../../include/t_master.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
@@ -68,8 +68,8 @@ int main() {
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, s_sock_fd, &ev) < 0)
         err_s_exit("ОШИБКА: epoll_ctl", s_sock_fd);
 
-    const char* detection_model = "/home/user/Diplom_Project/models/detector_v20.3_final.onnx";
-    const char* recognition_model = "/home/user/Diplom_Project/models/recognizer_v20.2_finalv0.2.onnx";
+    const char* detection_model = "./models/detector_v20.4_final.onnx";
+    const char* recognition_model = "./models/inception_embedding.onnx";
 
     fprintf(stderr, "[Master] Spawning %d worker threads...\n", MAX_WORKERS);
     worker_config_t worker_cfgs[MAX_WORKERS];
@@ -95,7 +95,6 @@ int main() {
                 c_sock_fd = accept(s_sock_fd, (struct sockaddr*)&claddr, &c_addr_size);
                 if (c_sock_fd < 0) { perror("ОШИБКА: accept"); continue; }
 
-                // --- ИСПРАВЛЕНИЕ ПРОТОКОЛА: Читаем длину пакета ---
                 uint32_t img_len_net = 0;
                 ssize_t len_recv = recv(c_sock_fd, &img_len_net, 4, MSG_WAITALL);
                 if (len_recv != 4) {
@@ -110,7 +109,6 @@ int main() {
                     close(c_sock_fd); continue;
                 }
 
-                // --- Читаем ровно img_len байт ---
                 ssize_t total_recv = 0;
                 while (total_recv < img_len) {
                     ssize_t r = recv(c_sock_fd, buff + total_recv, img_len - total_recv, 0);
@@ -124,7 +122,7 @@ int main() {
                 client.socket_fd = c_sock_fd;
                 memcpy(&client.addr, &claddr, sizeof(claddr));
                 client.addr_len = c_addr_size;
-                client.client_id = 0; // Заглушка, если не используется
+                client.client_id = 0;
 
                 fprintf(stderr, "[Master] FD %d: Enqueuing task...\n", c_sock_fd);
                 if (!workqueue_enqueue(g_queue, buff, (uint32_t)total_recv, &client)) {

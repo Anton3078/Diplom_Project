@@ -27,7 +27,7 @@ extern "C" {
 #define CACHE_LINE_SIZE 64
 #define MAX_IMAGE_SIZE   (2 * 1024 * 1024)
 #define DEFAULT_QUEUE_CAPACITY 256
-#define MAX_WORKERS      16
+#define MAX_WORKERS      2
 #define MAX_CLIENTS      1024
 #define BATCH_MAX        32
 
@@ -42,7 +42,7 @@ extern "C" {
 #endif
 
 #define MAX_FACES_PER_IMAGE 32
-#define EMBEDDING_SIZE      128    // может не использоваться, но оставлено для совместимости
+#define EMBEDDING_SIZE      512    // может не использоваться, но оставлено для совместимости
 
 #define ERR_DECODE          1
 #define ERR_MODEL_DETECTION 2
