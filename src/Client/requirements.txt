@@ -1,0 +1,10 @@
+flatbuffers==25.12.19
+numpy==2.4.4
+onnxruntime==1.25.1
+opencv-python==4.13.0.92
+packaging==26.2
+pillow==12.2.0
+protobuf==7.34.1
+PyQt6==6.10.2
+PyQt6-Qt6==6.10.2
+PyQt6_sip==13.11.1
