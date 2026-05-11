@@ -1,4 +1,4 @@
-#include "../../include/t_master.h"
+#include "../include/t_master.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>

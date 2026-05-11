@@ -3,7 +3,7 @@
  * @brief Реализация блокирующейся (lock-free) SPMC очереди с поддержкой пакетов.
  */
 
-#include "../../include/t_master.h"
+#include "../include/t_master.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
