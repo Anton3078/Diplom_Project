@@ -18,7 +18,7 @@
 
 // Библиотеки для ресайза
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "../../include/stb_image_resize2.h"
+#include "../include/stb_image_resize2.h"
 
 // ONNX Runtime
 #include <onnxruntime_c_api.h>
