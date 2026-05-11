@@ -3,7 +3,7 @@
  * @brief Реализация рабочего потока с каскадной обработкой Detection + Recognition.
  */
 
-#include "../../include/t_master.h"
+#include "../include/t_master.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
